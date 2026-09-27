@@ -21,14 +21,44 @@ MODELS_PATH = str(MODELS_DIR)
 for directory in [DATA_RAW_DIR, DATA_PROCESSED_DIR, MODELS_DIR]:
     os.makedirs(directory, exist_ok=True)
 
-# Gesture Classes
-STATIC_CLASSES = [
-    'Hello', 'Namaste', 'India', 'Language', 'Bye',
-    'Thank You', 'Welcome', 'Please', 'Sorry', 'Practice'
-]
+# ── Dynamic Gesture Classes (Preserved Untouched) ──────────────────────────
 DYNAMIC_CLASSES = [
     'Bye', 'Food', 'Hello', 'Help', 'Namaste', 'Sorry', 'Thank You', 'Want', 'Water'
 ]
+
+# ── 32 Static Classes (6 Words + 26 Alphabets) with Unique Internal Identifiers ─
+WORD_CLASSES = [
+    'WORD_HELLO',
+    'WORD_NAMASTE',
+    'WORD_I',
+    'WORD_BYE',
+    'WORD_SORRY',
+    'WORD_THANK_YOU'
+]
+
+ALPHABET_CLASSES = [
+    f'LETTER_{chr(c)}' for c in range(ord('A'), ord('Z') + 1)
+]
+
+# Exact 32 classes
+STATIC_CLASSES = WORD_CLASSES + ALPHABET_CLASSES
+
+# Mapping from internal identifier to user-facing display / text representation
+DISPLAY_NAME_MAP = {
+    'WORD_HELLO': 'Hello',
+    'WORD_NAMASTE': 'Namaste',
+    'WORD_I': 'I',
+    'WORD_BYE': 'Bye',
+    'WORD_SORRY': 'Sorry',
+    'WORD_THANK_YOU': 'Thank You',
+}
+for c in range(ord('A'), ord('Z') + 1):
+    char = chr(c)
+    DISPLAY_NAME_MAP[f'LETTER_{char}'] = char
+
+# Quick lookup sets
+ALPHABET_CLASS_SET = set(ALPHABET_CLASSES)
+WORD_CLASS_SET = set(WORD_CLASSES)
 
 # Landmark & Feature Constants
 NUM_HAND_LANDMARKS = 21
@@ -38,11 +68,10 @@ NUM_FEATURES_BOTH_HANDS = NUM_FEATURES_PER_HAND * 2     # 126
 
 # Data Collection Config
 SEQUENCE_LENGTH = 30
-SAMPLES_PER_CLASS = 500
-SEQUENCES_PER_CLASS = 50
-
-# Data Collection aliases
+SAMPLES_PER_CLASS = 200          # default for static classes
+ALPHABET_SAMPLES_PER_CLASS = 200 # target samples for each alphabet
 NUM_SAMPLES_STATIC = SAMPLES_PER_CLASS
+SEQUENCES_PER_CLASS = 50
 NUM_SEQUENCES = SEQUENCES_PER_CLASS
 
 # MediaPipe Config
@@ -61,11 +90,14 @@ RANDOM_STATE = 42
 PREDICTION_THRESHOLD = 0.6
 STABILITY_FRAMES = 5
 
-# Gesture Lifecycle & Debounce Config (Phase 1)
-GESTURE_RESET_FRAMES = 8          # Number of consecutive neutral frames to conclude a gesture stroke
-REST_POSITION_Y_THRESHOLD = 0.85   # Normalized Y coordinate threshold (wrist Y > 0.85 is considered resting)
+# Gesture Lifecycle & Debounce Config
+GESTURE_RESET_FRAMES = 8          # Consecutive neutral frames to conclude a gesture stroke
+REST_POSITION_Y_THRESHOLD = 0.85  # Normalized Y threshold (wrist Y > 0.85 = resting)
+
+# Fingerspelling / Letter-buffering Config
+LETTER_STABILITY_FRAMES = 10
+LETTER_PAUSE_SECONDS = 1.5
 
 # Text-to-Speech (TTS) Config
 TTS_RATE = 150
 TTS_VOLUME = 1.0
-
