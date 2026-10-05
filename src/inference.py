@@ -105,6 +105,7 @@ class ISLRecognizer:
         self.dynamic_model = None
         self.static_classes = None
         self.dynamic_classes = None
+        self._last_static_probabilities = None
         self.load_models()
 
         self.display_map = getattr(config, 'DISPLAY_NAME_MAP', {})
@@ -129,11 +130,20 @@ class ISLRecognizer:
 
         # Fingerspelling buffering
         self._letter_stability_frames = getattr(config, 'LETTER_STABILITY_FRAMES', 10)
-        self._letter_pause_seconds = getattr(config, 'LETTER_PAUSE_SECONDS', 1.5)
+        self._inter_letter_gap = getattr(config, 'INTER_LETTER_GAP_SECONDS', 0.8)
+        self._word_end_pause   = max(getattr(config, 'WORD_END_PAUSE_SECONDS', 2.0), 3.5)
         self._letter_buffer = []
         self._last_committed_letter = ""
+        self._current_normalized_pose = None
+        self._last_committed_pose = None
         self._letter_stable_count = 0
         self._candidate_letter = ""
+        self._pending_letter = ""
+        self._pending_letter_since = None
+        self._letter_confirmation_seconds = 0.2
+        self._static_hand_active = False
+        self._static_hand_settle_until = 0.0
+        self._static_hand_settle_seconds = 0.4
         self._last_gesture_time = time.time()
         self._word_finalised_for_this_pause = False
 
@@ -219,7 +229,9 @@ class ISLRecognizer:
 
     def predict_static(self, landmarks):
         normalized = self.normalize_landmarks(landmarks)
-        pred = self.static_model.predict(np.array([normalized]), verbose=0)[0]
+        self._current_normalized_pose = normalized
+        pred = self.static_model.predict_on_batch(np.array([normalized]))[0]
+        self._last_static_probabilities = pred
         class_idx = np.argmax(pred)
         confidence = float(pred[class_idx])
         class_name = self.static_classes[class_idx]
@@ -236,14 +248,54 @@ class ISLRecognizer:
 
     def stabilize_prediction(self, prediction, confidence):
         threshold = getattr(config, 'PREDICTION_THRESHOLD', 0.6)
+        previous_prediction = self.prediction_buffer[-1] if self.prediction_buffer else None
+        is_eligible_letter = confidence > threshold and (
+            prediction.startswith('LETTER_') or prediction in self.alphabet_classes
+        )
+        if self._pending_letter and (
+            not is_eligible_letter
+            or prediction != self._pending_letter
+            or previous_prediction is None
+        ):
+            self._pending_letter = ""
+            self._pending_letter_since = None
+
         if confidence > threshold:
             self.prediction_buffer.append(prediction)
+            if is_eligible_letter:
+                if time.monotonic() < self._static_hand_settle_until:
+                    self._candidate_letter = ""
+                    self._letter_stable_count = 0
+                    self._pending_letter = ""
+                    self._pending_letter_since = None
+                    return None
+                if previous_prediction is None or self._candidate_letter != prediction:
+                    self._candidate_letter = prediction
+                    self._letter_stable_count = 1
+                else:
+                    self._letter_stable_count += 1
+            else:
+                self._candidate_letter = ""
+                self._letter_stable_count = 0
         else:
             self.prediction_buffer.append(None)
+            self._candidate_letter = ""
+            self._letter_stable_count = 0
 
         if len(self.prediction_buffer) == self.prediction_buffer.maxlen:
             if len(set(self.prediction_buffer)) == 1 and self.prediction_buffer[0] is not None:
-                return self.prediction_buffer[0]
+                stable_prediction = self.prediction_buffer[0]
+                if stable_prediction.startswith('LETTER_') or stable_prediction in self.alphabet_classes:
+                    if self._letter_stable_count < self._letter_stability_frames:
+                        return None
+                    if self._pending_letter != stable_prediction:
+                        self._pending_letter = stable_prediction
+                        self._pending_letter_since = time.monotonic()
+                        return None
+                    if time.monotonic() - self._pending_letter_since >= self._letter_confirmation_seconds:
+                        return stable_prediction
+                else:
+                    return stable_prediction
         return None
 
     def is_hand_at_rest(self, landmarks):
@@ -284,21 +336,33 @@ class ISLRecognizer:
         return False
 
     def _commit_letter(self, letter: str) -> bool:
-        if letter == self._candidate_letter:
-            self._letter_stable_count += 1
-        else:
-            self._candidate_letter = letter
-            self._letter_stable_count = 1
-
-        if self._letter_stable_count < self._letter_stability_frames:
+        # stabilize_prediction() already guarantees 5 consecutive matching frames;
+        # no second stability gate needed here.
+        if self._last_committed_letter:
             return False
 
-        if letter == self._last_committed_letter:
-            return False
+        current_pose = self._current_normalized_pose
+        if self.mode == 'static':
+            if current_pose is None:
+                return False
+            if self._last_committed_letter:
+                if self._last_committed_pose is None:
+                    return False
+                current_points = current_pose.reshape(-1, 3)
+                committed_points = self._last_committed_pose.reshape(-1, 3)
+                present_points = np.any(current_points != 0, axis=1) | np.any(committed_points != 0, axis=1)
+                if not np.any(present_points):
+                    return False
+                pose_change = np.mean(
+                    np.linalg.norm(current_points[present_points] - committed_points[present_points], axis=1)
+                )
+                threshold = getattr(config, 'LETTER_POSE_CHANGE_THRESHOLD', 0.10)
+                if pose_change < threshold:
+                    return False
 
         self._letter_buffer.append(letter)
         self._last_committed_letter = letter
-        self._letter_stable_count = 0
+        self._last_committed_pose = current_pose.copy() if current_pose is not None else None
         print(f"  [Fingerspell] Added: '{letter}' -> Current buffer: {''.join(self._letter_buffer)}")
         return True
 
@@ -315,6 +379,7 @@ class ISLRecognizer:
 
         self._letter_buffer = []
         self._last_committed_letter = ""
+        self._last_committed_pose = None
         self._candidate_letter = ""
         self._letter_stable_count = 0
         self._word_finalised_for_this_pause = True
@@ -323,7 +388,10 @@ class ISLRecognizer:
         if not self._letter_buffer or self._word_finalised_for_this_pause:
             return
         elapsed = time.time() - self._last_gesture_time
-        if elapsed >= self._letter_pause_seconds:
+        # After inter-letter gap: unlock same-letter re-commit (e.g. spelling "ADD")
+        
+        # After word-end pause: finalize accumulated letters as one word
+        if elapsed >= self._word_end_pause:
             self._finalise_letter_word()
 
     def _handle_gesture_reset(self):
@@ -331,9 +399,10 @@ class ISLRecognizer:
         if self.neutral_frame_count >= self.reset_frames:
             self.active_gesture = None
             self.gesture_committed = False
-            self._candidate_letter = ""
-            self._letter_stable_count = 0
+            # Reset _last_committed_letter so the next stable prediction of the
+            # same letter after a neutral gap can commit again.
             self._last_committed_letter = ""
+            self._last_committed_pose = None
 
     def clear_sentence(self):
         self.current_sentence = []
@@ -343,9 +412,13 @@ class ISLRecognizer:
         self.neutral_frame_count = 0
         self._letter_buffer = []
         self._last_committed_letter = ""
+        self._last_committed_pose = None
         self._candidate_letter = ""
         self._letter_stable_count = 0
         self._word_finalised_for_this_pause = False
+
+    def clear(self):
+        self.clear_sentence()
 
     def draw_ui(self, frame, prediction, confidence, fps):
         h, w = frame.shape[:2]
@@ -376,7 +449,7 @@ class ISLRecognizer:
         if self._letter_buffer:
             buf_str = "".join(self._letter_buffer)
             elapsed = time.time() - self._last_gesture_time
-            rem = max(0.0, self._letter_pause_seconds - elapsed)
+            rem = max(0.0, self._word_end_pause - elapsed)
             cv2.putText(frame, f"Spelling: {buf_str} (pause in {rem:.1f}s)", (20, h - 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 230, 255), 2)
 
@@ -412,6 +485,13 @@ class ISLRecognizer:
             current_pred = None
             current_conf = 0.0
             is_rest = not hands_detected or self.is_hand_at_rest(landmarks)
+            hand_active = hands_detected and not is_rest
+            if self.mode == 'static':
+                if hand_active and not self._static_hand_active:
+                    self._static_hand_settle_until = (
+                        time.monotonic() + self._static_hand_settle_seconds
+                    )
+                self._static_hand_active = hand_active
 
             if hands_detected and not is_rest:
                 if self.mode == 'static' and self.static_model is not None:
@@ -428,8 +508,25 @@ class ISLRecognizer:
                 stable_pred = self.stabilize_prediction(current_pred, current_conf)
                 if stable_pred:
                     self._handle_gesture_commit(stable_pred, current_conf)
+                elif self.mode == 'static' and self._last_committed_letter:
+                    self.neutral_frame_count = 0
                 else:
                     self._handle_gesture_reset()
+
+                if self.mode == 'static' and current_pred is not None and self.frame_count % 10 == 0:
+                    top_indices = np.argsort(self._last_static_probabilities)[-3:][::-1]
+                    print("[Live Diagnostic]")
+                    for rank, index in enumerate(top_indices, start=1):
+                        class_name = self.static_classes[index]
+                        display_name = self.display_map.get(class_name, class_name)
+                        confidence = float(self._last_static_probabilities[index]) * 100
+                        print(f"Top {rank}: {display_name} = {confidence:.1f}%")
+
+                    if stable_pred and (stable_pred.startswith('LETTER_') or stable_pred in self.alphabet_classes):
+                        stable_letter = self.display_map.get(stable_pred, stable_pred.replace('LETTER_', ''))
+                        print(f"Stable letter: {stable_letter}")
+                    else:
+                        print("Stable letter: none")
             else:
                 if self.mode == 'dynamic' and len(self.sequence_buffer) > 0:
                     self.sequence_buffer.popleft()
@@ -469,5 +566,5 @@ if __name__ == "__main__":
 
     recognizer = ISLRecognizer(mode=args.mode)
     if args.pause is not None:
-        recognizer._letter_pause_seconds = args.pause
+        recognizer._word_end_pause = args.pause
     recognizer.run()

@@ -91,12 +91,14 @@ PREDICTION_THRESHOLD = 0.6
 STABILITY_FRAMES = 5
 
 # Gesture Lifecycle & Debounce Config
-GESTURE_RESET_FRAMES = 8          # Consecutive neutral frames to conclude a gesture stroke
+GESTURE_RESET_FRAMES = 3          # Consecutive neutral frames to conclude a gesture stroke
 REST_POSITION_Y_THRESHOLD = 0.85  # Normalized Y threshold (wrist Y > 0.85 = resting)
 
 # Fingerspelling / Letter-buffering Config
 LETTER_STABILITY_FRAMES = 10
-LETTER_PAUSE_SECONDS = 1.5
+LETTER_POSE_CHANGE_THRESHOLD = 0.10  # Mean normalized landmark displacement required for a new letter
+INTER_LETTER_GAP_SECONDS = 0.8   # max silence between letters in the same word
+WORD_END_PAUSE_SECONDS   = 2.0   # silence after last letter that finalizes the word
 
 # Text-to-Speech (TTS) Config
 TTS_RATE = 150
