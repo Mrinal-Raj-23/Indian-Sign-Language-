@@ -100,6 +100,13 @@ LETTER_POSE_CHANGE_THRESHOLD = 0.10  # Mean normalized landmark displacement req
 INTER_LETTER_GAP_SECONDS = 0.8   # max silence between letters in the same word
 WORD_END_PAUSE_SECONDS   = 2.0   # silence after last letter that finalizes the word
 
+# Personalization Config
+PERSONAL_SAMPLES_PER_CLASS = 25
+PERSONAL_DATA_PATH = str(BASE_DIR / "data" / "personal")
+PERSONAL_CLASSES = [
+    'Hello', 'Namaste', 'I', 'You', 'Bye', 'Thank You', 'Sorry'
+]
+
 # Text-to-Speech (TTS) Config
 TTS_RATE = 150
 TTS_VOLUME = 1.0
