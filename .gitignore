@@ -20,3 +20,13 @@ Thumbs.db
 
 # Environment variables & secrets
 .env
+
+# Trained model files (large binaries)
+models/*.h5
+models/*.keras
+
+# Personal/user-specific data
+data/personal/
+
+# Leftover scripts
+_test_personalize.py

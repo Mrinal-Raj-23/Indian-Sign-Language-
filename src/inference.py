@@ -373,6 +373,34 @@ class ISLRecognizer:
 
         return annotated_frame, current_pred, current_conf, hands_detected
 
+    def swap_static_model(self, model_path: str, le_path: str) -> tuple[bool, str]:
+        """
+        Hot-swap the static model and its label encoder at runtime.
+        MediaPipe, TTS, and dynamic model are completely untouched.
+
+        Returns:
+            (success, message)
+        """
+        if not os.path.exists(model_path):
+            return False, f"Model file not found: {model_path}"
+        if not os.path.exists(le_path):
+            return False, f"Label encoder not found: {le_path}"
+        try:
+            new_model = tf.keras.models.load_model(model_path)
+            new_classes = np.load(le_path, allow_pickle=True)
+            self.static_model = new_model
+            self.static_classes = new_classes
+            # Clear prediction state so stale buffers don't bleed across models
+            self.prediction_buffer.clear()
+            self.active_gesture = None
+            self.gesture_committed = False
+            self.neutral_frame_count = 0
+            print(f"  Static model swapped: {os.path.basename(model_path)} "
+                  f"({len(new_classes)} classes)")
+            return True, f"Loaded {os.path.basename(model_path)} ({len(new_classes)} classes)"
+        except Exception as e:
+            return False, f"Failed to load model: {e}"
+
     def set_mode(self, new_mode):
         """Switch recognition mode at runtime. Used by the GUI app."""
         if new_mode == self.mode:

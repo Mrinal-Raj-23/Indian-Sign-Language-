@@ -65,6 +65,13 @@ STABILITY_FRAMES = 5
 GESTURE_RESET_FRAMES = 8          # Number of consecutive neutral frames to conclude a gesture stroke
 REST_POSITION_Y_THRESHOLD = 0.85   # Normalized Y coordinate threshold (wrist Y > 0.85 is considered resting)
 
+# Personalization Config
+PERSONAL_SAMPLES_PER_CLASS = 25
+PERSONAL_DATA_PATH = str(BASE_DIR / "data" / "personal")
+PERSONAL_CLASSES = [
+    'Hello', 'Namaste', 'I', 'You', 'Bye', 'Thank You', 'Sorry'
+]
+
 # Text-to-Speech (TTS) Config
 TTS_RATE = 150
 TTS_VOLUME = 1.0
